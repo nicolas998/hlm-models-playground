@@ -15,7 +15,8 @@ sweeps, all from the same equations the solver integrated.
 
 | File | What it is |
 |---|---|
-| [`models.py`](models.py) | Model registry and the right-hand sides of all models (`254_toplayer`, `254_const_infil`, `255_NonLinearSub`, `CRB3`), plus `flux_timeseries`. |
+| [`models.py`](models.py) | Model registry and the right-hand sides of all models (`254_toplayer`, `254_const_infil`, `255_NonLinearSub`, `CRB3`, `NewZealandV1`, `ConstantRunoff`), plus `flux_timeseries` and `simulate`. |
+| [`app.py`](app.py) | **Hillslope model explorer** web app: define the hillslope and a 24 h hyetograph, pick up to 3 models, edit their parameters and compare hydrographs and storages. |
 | [`setup.py`](setup.py) | Model-independent helpers: `precalculations` (per-link parameters, as ASYNCH computes them), `ArrayForcing` (hourly rain/evap forcing) and default global-parameter vectors. |
 | [`setup_Playground_HLM_CollieRB3.ipynb`](setup_Playground_HLM_CollieRB3.ipynb) | Single-link runs of model 255 and CRB3: hydrograph, storages, fluxes, water balance, one-at-a-time sensitivity and interactive hydrograph sweeps. |
 | [`docs/adding_a_model.md`](docs/adding_a_model.md) | **How to add a new model** to the registry. |
@@ -57,6 +58,26 @@ fluxes = flux_timeseries(model, sol.t, sol.y, params, gp, forcing)
 print(model.state_names, list(fluxes))
 ```
 
+## Hillslope model explorer (web app)
+
+```bash
+streamlit run app.py
+```
+
+This opens a browser page. Set the hillslope (`A_h`, `L_h`, upstream area
+`A`) and the hourly rainfall in the sidebar, then tick up to three models.
+Each ticked model expands to show its parameters and initial state,
+pre-filled with defaults. The plots update on every change:
+
+1. rainfall (inverted bars),
+2. simulated streamflow per model,
+3. storages per model (one colour per model, one line style per storage).
+
+Hover, zoom and click legend entries to explore. A table below gives the
+peak, time to peak and outflow volume. New models appear automatically once
+their registration carries the metadata described in
+[adding_a_model.md](docs/adding_a_model.md#making-the-model-show-up-in-the-web-app).
+
 ## Conventions
 
 - **Time** is in **minutes**. Forcing records are piecewise constant over
@@ -76,5 +97,7 @@ print(model.state_names, list(fluxes))
 | `254_const_infil` | same as 254 | 254 with constant infiltration `k_t = A·k_2`. |
 | `255_NonLinearSub` | same as 254 | 254 with a non-linear sub-surface → channel release (`Ssmin`, `Ssmax`, `Ss_coef`, `Ss_exp`). |
 | `CRB3` | `Q, s_s, s_p, s_g` | Collie River Basin 3 (MARRMoT-style): soil, ponded and groundwater storages. No channel routing; streamflow is the `q_out` flux. |
+| `NewZealandV1` | `Q, s_m, s_p` | Soil-matrix (Sm) and ponded (Sp) storages; Sp fills by smoothed saturation excess. Sm drains by sub-surface (above field capacity) and base flow. No channel routing; streamflow is the `q_out` flux. |
+| `ConstantRunoff` | `s_p, s_a, surf_runoff, total_runoff` | Asynch 190 hillslope (port of UMN_HLM_Coupled `model_ConstantRunoff.hpp`): rain split by a constant coefficient `rc` between a fast and a slow linear reservoir. Streamflow is the `q_out` flux. |
 
 To list them at runtime: `from models import MODELS; print(MODELS.keys())`.

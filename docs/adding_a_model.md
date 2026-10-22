@@ -146,6 +146,65 @@ Checklist for the registration:
 - Always pass `fluxes=`. Without it, `flux_timeseries` raises a
   `ValueError`.
 
+#### Making the model show up in the web app
+
+The explorer app ([`app.py`](../app.py)) lists every model whose
+registration also carries simulation metadata. Add these keywords to
+`register_model`:
+
+```python
+@register_model(
+    "LR1", dim=2, state_names=("q", "s_h"), description="...",
+    fluxes=fluxes_lr1,
+    precalc=precalculations,                  # (L, A_h, A_i, gp) -> params
+    param_names=(("v_0", "m/s"), ("lambda_1", "-"), ("lambda_2", "-"),
+                 ("v_h", "m/s"), ("S_max", "m"), ("k_I_factor", "-")),
+    default_params=GLOBAL_PARAMS_LR1,         # same length as param_names
+    y0=(0.001, 0.01),                         # default initial state, length dim
+    storages=("s_h",),                        # states plotted as storages [m]
+    streamflow="q",                           # state name or flux key [m^3/s]
+)
+```
+
+`streamflow` is a state name for routed models (254 family: `"q"`) or a flux
+key for unrouted ones (CRB3, NewZealandV1: `"q_out"`). The same metadata
+lets you run the model in one call with `models.simulate(...)`.
+
+To enable the app's **Equations** button, also pass the equations as data:
+
+```python
+    balance={                                  # storage: (inflows, outflows)
+        "s_h": (("rain_in",), ("q_hl", "e_h")),
+    },
+    flux_eqs={                                 # flux key: (symbol, rhs), LaTeX
+        "rain_in": (r"P",      r"c_1\,p(t)"),
+        "e_h":     (r"E_h",    r"E_{pot}\,\min(S_h / S_{max},\,1)"),
+        "q_hl":    (r"q_{hl}", r"k_2\,S_h"),
+    },
+    extra_eqs=(                                # definitions / routing, LaTeX
+        (r"k_2", r"60\,v_h\,\frac{L}{A_h}"),
+    ),
+```
+
+The app builds the balance equations (dS/dt = inflows − outflows) from
+`balance`. It also draws a **flow diagram** from it (`models.flow_edges`):
+a flux leaving one storage and entering another becomes an arrow between
+them. A flux that only enters storages comes from *Rain*. One that only
+leaves goes to *ET* if its key starts with `e`, otherwise to *Channel*. When
+that guess is wrong, for example a flux split between two targets, override
+single fluxes with `diagram=`, as CRB3 does:
+
+```python
+    diagram={"q_ss": None,                    # hide the un-split flux
+             "q_sg": ("s_s", "s_g"),          # (from, to); Rain/ET/Channel
+             "q_sL": ("s_s", CHANNEL)},       # are models.RAIN/ET/CHANNEL
+```
+
+Every key in `balance` must be a key of `flux_eqs` and of the
+dict your `fluxes` function returns, and the balance must match `dydt`
+exactly. Check it numerically: at a few random states, the sum of inflows
+minus outflows should equal the corresponding `dydt` entry.
+
 > **Variants of an existing model:** if your model only changes one or two
 > fluxes of the 254 family, copy that model's flux function, change those
 > lines, and reuse `_assemble_254_rhs` for `dydt`. This is how

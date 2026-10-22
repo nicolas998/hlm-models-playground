@@ -42,6 +42,26 @@ Global-parameter vector layout (Collie River Basin 3, ``GLOBAL_PARAMS_CRB3``)
     [7]  B2       exp qgL                            [-]
     [8]  v_h      hillslope velocity (for k_2)       [m/s]
 Per-link params come from :func:`precalculations_crb3`.
+
+Global-parameter vector layout (New Zealand V1, ``GLOBAL_PARAMS_NZV1``)
+-----------------------------------------------------------------------
+    [0]  S_fc     field capacity                     [m]
+    [1]  S_max    max soil-matrix storage            [m]
+    [2]  V_p      ponded velocity, K_p = L/A_h*V_p*60 [m/s]
+    [3]  V_s      sub-surface velocity (K_s)         [m/s]
+    [4]  V_b      base-flow velocity (K_b)           [m/s]
+    [5]  a_p      exp qpL = K_p*Sp^a_p               [-]
+    [6]  a_s      exp qsL = K_s*(Sm - S_fc)^a_s      [-]
+    [7]  a_b      exp qbL = K_b*Sm^a_b               [-]
+    [8]  M        forest fraction                    [-]
+Per-link params come from :func:`precalculations_nzv1`.
+
+Global-parameter vector layout (ConstantRunoff, ``GLOBAL_PARAMS_CONSTANT_RUNOFF``)
+-------------------------------------------------------------------------------
+    [0]  rc       runoff coefficient (rain -> fast)  [-]
+    [1]  v_h      runoff reference velocity (k_2)    [m/s]
+    [2]  v_g      baseflow reference velocity (k_3)  [m/s]
+Per-link params come from :func:`precalculations_constant_runoff`.
 """
 
 import numpy as np
@@ -95,6 +115,25 @@ GLOBAL_PARAMS_CRB3 = np.array([
     0.02,         # 8 v_h     hillslope velocity (k_2)   [m/s]
 ])
 
+GLOBAL_PARAMS_NZV1 = np.array([
+    0.03,         # 0 S_fc    field capacity             [m]
+    0.15,         # 1 S_max   max soil-matrix storage    [m]
+    0.02,         # 2 V_p     ponded velocity            [m/s]
+    0.002,        # 3 V_s     sub-surface velocity       [m/s]
+    0.0002,       # 4 V_b     base-flow velocity         [m/s]
+    1.0,          # 5 a_p     exp qpL                    [-]
+    1.0,          # 6 a_s     exp qsL                    [-]
+    1.0,          # 7 a_b     exp qbL                    [-]
+    0.1,          # 8 M       forest fraction            [-]
+])
+
+# Defaults from UMN_HLM_Coupled (qgis_plugin runoff_models.py / Stony Brook).
+GLOBAL_PARAMS_CONSTANT_RUNOFF = np.array([
+    0.33,         # 0 rc      runoff coefficient         [-]
+    0.1,          # 1 v_h     runoff velocity (k_2)      [m/s]
+    2.2917e-5,    # 2 v_g     baseflow velocity (k_3)    [m/s]
+])
+
 
 def precalculations(L, A_h, A_i, global_params):
     """Reproduce Asynch's model-254 per-link parameter derivation.
@@ -146,6 +185,45 @@ def precalculations_crb3(L, A_h, A_i, global_params):
     k_2 = v_h * L / A_h * 60.0     # Sp -> channel rate  [1/min]
     c_1 = 0.001 / 60.0             # rainfall mm/hr -> m/min
     c_2 = A_h / 60.0                       # m/min * A_h -> m^3/s
+
+    return np.array([L, A_h, np.nan, k_2, np.nan, c_1, c_2])
+
+
+def precalculations_nzv1(L, A_h, A_i, global_params):
+    """Per-link parameters for the New Zealand V1 model.
+
+    Same output layout as :func:`precalculations`. NZV1 builds its own
+    K_p, K_s, K_b from ``L``, ``A_h`` and the velocities in ``global_params``,
+    so ``invtau``, ``k_2`` and ``k_i`` are NaN (unused). ``A_i`` is accepted
+    for signature parity only.
+
+    Returns
+    -------
+    numpy.ndarray, shape (7,) -> [L, A_h, nan, nan, nan, c_1, c_2]
+    """
+    c_1 = 0.001 / 60.0             # rainfall mm/hr -> m/min
+    c_2 = A_h / 60.0               # m/min * A_h -> m^3/s
+
+    return np.array([L, A_h, np.nan, np.nan, np.nan, c_1, c_2])
+
+
+def precalculations_constant_runoff(L, A_h, A_i, global_params):
+    """Per-link parameters for the ConstantRunoff model (asynch 190 hillslope).
+
+    Same output layout as :func:`precalculations`. ``k_2`` is the runoff
+    (fast) storage rate; the baseflow rate ``k_3`` is built in the flux
+    function from ``v_g``. No channel routing, so ``invtau`` and ``k_i`` are
+    NaN. ``A_i`` is accepted for signature parity only.
+
+    Returns
+    -------
+    numpy.ndarray, shape (7,) -> [L, A_h, nan, k_2, nan, c_1, c_2]
+    """
+    v_h = global_params[1]
+
+    k_2 = v_h * L / A_h * 60.0     # s_p -> channel rate  [1/min]
+    c_1 = 0.001 / 60.0             # rainfall mm/hr -> m/min
+    c_2 = A_h / 60.0               # m/min * A_h -> m^3/s
 
     return np.array([L, A_h, np.nan, k_2, np.nan, c_1, c_2])
 
