@@ -183,7 +183,7 @@ def equations_panel(model, res=None):
         st.caption("Fluxes and rates")
         st.latex(_aligned(f"{lhs} &= {rhs}" for lhs, rhs in model.flux_eqs.values()))
         if model.extra_eqs:
-            st.caption("Definitions and routing")
+            st.caption("Definitions")
             st.latex(_aligned(f"{lhs} &= {rhs}" for lhs, rhs in model.extra_eqs))
         st.caption("p(t): rainfall [mm/h]; E_pot: potential ET [m/min]; "
                    "storages in m, hillslope fluxes in m/min, Q_out in m³/s.")
@@ -256,8 +256,8 @@ with st.sidebar:
                         value=350.0, step=10.0, format="%g")
     A_i = st.number_input("Upstream area A [km²]", min_value=1e-3,
                           value=50.0, step=1.0, format="%g",
-                          help="Only used by models with channel routing "
-                               "(254 family, through invtau).")
+                          help="Passed to each model's precalculations; none "
+                               "of the current (unrouted) models uses it.")
 
     st.header("Simulation")
     sim_hours = st.number_input("Length [h]", min_value=MAX_RAIN_HOURS,
