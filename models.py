@@ -248,6 +248,46 @@ def simulate(model, L, A_h, A_i, forcing, t_end, global_params=None, y0=None,
     return {"t": sol.t, "y": sol.y, "fluxes": f, "q": q}
 
 
+def route_channel(t, q_in, v_0, lambda_1, lambda_2, L, A_i, q0=None):
+    """Route a hillslope outflow through the HLM non-linear channel reservoir.
+
+    Solves asynch's channel equation
+    ``dq/dt = invtau * q**lambda_1 * (-q + q_in(t))`` with
+    ``invtau = 60 v_0 A_i**lambda_2 / ((1 - lambda_1) L)``.
+
+    Parameters
+    ----------
+    t : array_like, shape (N,)
+        Times [min]; ``q_in`` is interpolated linearly between them.
+    q_in : array_like, shape (N,)
+        Inflow to the channel [m^3/s], e.g. a model's ``q_out``.
+    v_0 : float, channel reference velocity [m/s]
+    lambda_1, lambda_2 : float, discharge and area exponents [-]
+    L : float, channel length the water travels [m]
+    A_i : float, upstream area [km^2]
+    q0 : float, initial discharge [m^3/s]; defaults to ``q_in[0]``
+        (steady state), floored at 1e-6 so ``q**lambda_1`` is not stuck at 0.
+
+    Returns
+    -------
+    numpy.ndarray, shape (N,) : routed discharge [m^3/s] at ``t``.
+    """
+    t = np.asarray(t, dtype=float)
+    q_in = np.asarray(q_in, dtype=float)
+    invtau = 60.0 * v_0 * A_i ** lambda_2 / ((1.0 - lambda_1) * L)   # [1/min]
+    q0 = max(q_in[0] if q0 is None else q0, 1e-6)
+
+    def rhs(tt, q):
+        qq = max(q[0], 1e-9)
+        return [invtau * qq ** lambda_1 * (-qq + np.interp(tt, t, q_in))]
+
+    sol = solve_ivp(rhs, (t[0], t[-1]), [q0], t_eval=t, method="LSODA",
+                    rtol=1e-6, atol=1e-9, max_step=10.0)
+    if not sol.success:
+        raise RuntimeError(f"channel routing: {sol.message}")
+    return sol.y[0]
+
+
 def _read_forcing(forcing, t):
     """Sample forcing at time t and convert e_pot to [m/min]."""
     rain_mm_hr, epot_mm_month = forcing(t) if callable(forcing) else forcing

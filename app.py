@@ -18,13 +18,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from models import MODELS, simulate, flow_edges, RAIN, ET, CHANNEL
+from models import MODELS, simulate, route_channel, flow_edges, RAIN, ET, CHANNEL
 from setup import ArrayForcing
 
 MAX_MODELS = 3
 MAX_RAIN_HOURS = 24
 MODEL_COLORS = ("#1f77b4", "#d62728", "#2ca02c")
-STORAGE_DASHES = ("solid", "dash", "dot", "dashdot", "longdash", "longdashdot")
+STORAGE_DASHES = ("solid", "dot", "dashdot", "longdashdot", "longdash",
+                  "2px,4px,8px,4px")    # "dash" is reserved for routed Q
 DEFAULT_RAIN = [0, 0, 5, 10, 17, 10, 8, 3] + [0] * (MAX_RAIN_HOURS - 8)
 
 st.set_page_config(page_title="Hillslope model explorer", layout="wide")
@@ -68,6 +69,11 @@ def run_model(name, L, A_h, A_i, rain, epot, sim_hours, gp, y0):
     t_end = sim_hours * 60.0
     return simulate(model, L, A_h, A_i, forcing, t_end, global_params=gp,
                     y0=y0, t_eval=np.arange(0.0, t_end + 1e-9, 5.0))
+
+
+@st.cache_data(show_spinner=False)
+def run_routing(t, q, routing):
+    return route_channel(t, q, **routing)
 
 
 def model_inputs(model):
@@ -189,7 +195,7 @@ def equations_panel(model, res=None):
                    "storages in m, hillslope fluxes in m/min, Q_out in m³/s.")
 
 
-def make_figure(rain, results, sim_hours, log_q, log_storage):
+def make_figure(rain, results, routed, sim_hours, log_q, log_storage):
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True,
                         row_heights=[0.2, 0.4, 0.4], vertical_spacing=0.04)
 
@@ -206,6 +212,12 @@ def make_figure(rain, results, sim_hours, log_q, log_storage):
             legendgrouptitle_text=name, line=dict(color=color, width=2.5),
             hovertemplate="%{y:.4g} m³/s<extra>" + name + "</extra>"),
             row=2, col=1)
+        if name in routed:
+            fig.add_trace(go.Scatter(
+                x=t_h, y=routed[name], name=f"{name} · Q routed", legendgroup=name,
+                line=dict(color=color, width=2.5, dash="dash"),
+                hovertemplate="%{y:.4g} m³/s<extra>" + name + " routed</extra>"),
+                row=2, col=1)
         for sname, dash in zip(model.storages, STORAGE_DASHES):
             s_mm = res["y"][model.state_names.index(sname)] * 1e3
             fig.add_trace(go.Scatter(
@@ -228,7 +240,7 @@ def make_figure(rain, results, sim_hours, log_q, log_storage):
     return fig
 
 
-def summary_table(results, rain, A_h):
+def summary_table(results, routed, rain, A_h):
     rain_vol = float(np.sum(rain)) * 1e-3 * A_h          # mm/hr * 1 h -> m^3
     rows = []
     for name, _, res in results:
@@ -238,10 +250,15 @@ def summary_table(results, rain, A_h):
         rows.append({
             "Model": name,
             "Peak Q [m³/s]": q[k],
-            "Time to peak [h]": t[k] / 60.0,
-            "Outflow volume [m³]": vol,
-            "Outflow / rain [-]": vol / rain_vol if rain_vol > 0 else np.nan,
+            "Peak time [h]": t[k] / 60.0,
+            "Volume [m³]": vol,
+            "Out / rain [-]": vol / rain_vol if rain_vol > 0 else np.nan,
         })
+        if name in routed:
+            qr = routed[name]
+            kr = int(np.argmax(qr))
+            rows[-1]["Routed peak [m³/s]"] = qr[kr]
+            rows[-1]["Lag [h]"] = (t[kr] - t[k]) / 60.0
     return pd.DataFrame(rows).set_index("Model")
 
 
@@ -256,8 +273,29 @@ with st.sidebar:
                         value=350.0, step=10.0, format="%g")
     A_i = st.number_input("Upstream area A [km²]", min_value=1e-3,
                           value=50.0, step=1.0, format="%g",
-                          help="Passed to each model's precalculations; none "
-                               "of the current (unrouted) models uses it.")
+                          help="Drainage area at the outlet; used by the "
+                               "channel routing (invtau).")
+
+    st.header("Routing")
+    route_on = st.toggle("Route through the channel", value=False,
+                         help="Adds each model's routed hydrograph (dashed).")
+    routing = None
+    if route_on:
+        c1, c2 = st.columns(2)
+        v_0 = c1.number_input("v_0 [m/s]", min_value=1e-3, value=0.33,
+                              step=0.01, format="%g")
+        L_d = c2.number_input("L_d [m]", min_value=1.0, value=5000.0,
+                              step=500.0, format="%g",
+                              help="Downstream channel length the water "
+                                   "travels before the outlet.")
+        lambda_1 = c1.number_input("λ1 [-]", min_value=0.0, max_value=0.99,
+                                   value=0.20, step=0.01, format="%g")
+        lambda_2 = c2.number_input("λ2 [-]", min_value=-1.0, max_value=1.0,
+                                   value=-0.10, step=0.01, format="%g")
+        routing = dict(v_0=v_0, lambda_1=lambda_1, lambda_2=lambda_2,
+                       L=L_d, A_i=A_i)
+        st.latex(r"\frac{dq}{dt} = \tau^{-1} q^{\lambda_1}\,(Q_{out} - q)")
+        st.latex(r"\tau^{-1} = \frac{60\,v_0\,A^{\lambda_2}}{(1-\lambda_1)\,L_d}")
 
     st.header("Simulation")
     sim_hours = st.number_input("Length [h]", min_value=MAX_RAIN_HOURS,
@@ -327,16 +365,26 @@ with right, st.container(key="results_panel"):
             except Exception as exc:                     # solver blow-ups etc.
                 st.error(f"{model.name} failed: {exc}")
 
+        routed = {}
+        if routing is not None:
+            for name, _, res in results:
+                try:
+                    routed[name] = run_routing(res["t"], res["q"], routing)
+                except Exception as exc:
+                    st.error(f"Routing {name} failed: {exc}")
+
         c1, c2 = st.columns(2)
         log_q = c1.toggle("Log scale for streamflow", value=False)
         log_storage = c2.toggle("Log scale for storages", value=False)
-        st.plotly_chart(make_figure(rain, results, int(sim_hours), log_q,
+        st.plotly_chart(make_figure(rain, results, routed, int(sim_hours), log_q,
                                     log_storage),
                         width="stretch")
         if results:
-            st.dataframe(summary_table(results, rain, A_h).style.format("{:.4g}"))
-            st.caption("Outflow / rain can exceed 1: outflow also includes "
-                       "drainage of the initial storages.")
+            st.dataframe(summary_table(results, routed, rain, A_h)
+                         .style.format("{:.4g}"))
+            st.caption("Out / rain can exceed 1: outflow also includes "
+                       "drainage of the initial storages. Lag = time "
+                       "between the hillslope and the routed peak.")
 
     results_by_name = {name: res for name, _, res in results}
     for model in eq_models:

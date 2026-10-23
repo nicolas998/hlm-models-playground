@@ -78,7 +78,16 @@ pre-filled with defaults. The plots update on every change:
 3. storages per model (one colour per model, one line style per storage).
 
 Hover, zoom and click legend entries to explore. A table below gives the
-peak, time to peak and outflow volume. New models appear automatically once
+peak, time to peak and outflow volume.
+
+**Optional channel routing.** Turn on *Route through the channel* in the
+sidebar to route each model's hillslope outflow through the HLM non-linear
+channel reservoir (`models.route_channel`):
+`dq/dt = τ⁻¹ q^λ1 (Q_out − q)`, `τ⁻¹ = 60 v_0 A^λ2 / ((1 − λ1) L_d)`.
+Here `A` is the upstream area and `L_d` the downstream channel length the
+water travels. The routed hydrographs are drawn dashed, in each model's
+colour, and the table adds the routed peak and the lag between the two
+peaks. New models appear automatically once
 their registration carries the metadata described in
 [adding_a_model.md](docs/adding_a_model.md#making-the-model-show-up-in-the-web-app).
 
