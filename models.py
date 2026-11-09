@@ -58,7 +58,7 @@ from setup import (
     precalculations_constant_runoff,
     GLOBAL_PARAMS_TOPLAYER, GLOBAL_PARAMS_CRB3, GLOBAL_PARAMS_NZV1,
     GLOBAL_PARAMS_CONSTANT_RUNOFF, GLOBAL_PARAMS_XINANJIANG,
-    GLOBAL_PARAMS_TANK_SMA,
+    GLOBAL_PARAMS_TANK_SMA, GLOBAL_PARAMS_SMAR,
 )
 
 
@@ -945,4 +945,148 @@ def model_tank_sma(t, y, params, global_params, forcing,
     ans[2] = f["f_12"] - f["e_2"] - f["t_1"] - f["f_23"] - f["y_3"]      # s_2
     ans[3] = f["f_23"] - f["e_3"] - f["f_34"] - f["y_4"]                 # s_3
     ans[4] = f["f_34"] - f["e_4"] - f["y_5"]                             # s_4
+    return ans
+
+
+# ----------------------------------------------------------------------------
+# SMAR (MARRMoT m_40_smar_8p_6s) + hillslope routing store Sr
+# ----------------------------------------------------------------------------
+# Port of step_model_40 in HydrologicModelingCourse/marrmot_models.py, written
+# for a continuous ODE solver:
+#   * MARRMoT routes R1 + R2 + (1-G)*R3 through a gamma unit hydrograph (N, K
+#     in days), i.e. catchment routing. Here that runoff fills a hillslope
+#     routing store Sr drained as q_rL = K_r * Sr^a_1, as Xinanjiang does with
+#     its ponded store, so N and K are dropped;
+#   * P* = max(P - Ep, 0) evaporates part of the rain before it reaches the
+#     soil; that part is exposed as the flux e_0 so the water balance closes;
+#   * layer overflow (S_i full -> S_{i+1}) uses MARRMoT's logistic smoother
+#     (_smooth_excess); the evaporation cascade (E_i only once S_{i-1} is
+#     empty) uses the TankSMA ramp _tank_on, which is 0 for an empty layer.
+# As in the source, E1 draws on E* = max(Ep - P, 0) and E2..E5 on Ep.
+def fluxes_smar(t, y, params, global_params, forcing):
+    H, Y, Smax, C, G, KG, v_h, a_1 = global_params[0:8]
+    Y = Y * 1e-3 * PER_DAY                  # mm/d -> m/min
+    KG = KG * PER_DAY                       # 1/d  -> 1/min
+    S_n = Smax / 5.0                        # capacity of each soil layer [m]
+
+    rain_mm_hr, e_pot = _read_forcing(forcing, t)
+    L, A_h, invtau, k_2, k_i, c_1, c_2 = params
+    on = [_tank_on(v) for v in y[0:5]]
+    s = [max(v, 0.0) for v in y[0:5]]
+    s_g, s_r = max(y[5], 0.0), max(y[6], 0.0)
+
+    P = rain_mm_hr * c_1
+    K_r = L / A_h * v_h * 60.0
+
+    # effective rainfall / evaporation demand
+    P_star = max(P - e_pot, 0.0)
+    E_star = max(e_pot - P, 0.0)
+
+    # surface partition: saturation excess, infiltration, infiltration excess
+    R1 = P_star * H * min(sum(s) / Smax, 1.0)
+    I = min(P_star - R1, Y)
+    R2 = P_star - R1 - I
+
+    # layers fill top-down: each passes its inflow on once it is full
+    q12 = I * _smooth_excess(s[0], S_n)
+    q23 = q12 * _smooth_excess(s[1], S_n)
+    q34 = q23 * _smooth_excess(s[2], S_n)
+    q45 = q34 * _smooth_excess(s[3], S_n)
+    R3 = q45 * _smooth_excess(s[4], S_n)
+
+    # evaporation: layer i only once layer i-1 is empty, reduced by C^(i-1)
+    E1 = E_star * on[0]
+    E2, E3, E4, E5 = (C ** i * e_pot * (1.0 - on[i - 1]) * on[i]
+                      for i in range(1, 5))
+
+    q_gL = KG * s_g
+    q_rL = K_r * s_r ** a_1
+
+    return {
+        "rain_in": P,
+        "e_0": P - P_star,                  # rain evaporated directly
+        "p_star": P_star, "e_star": E_star,
+        "r_1": R1, "inf": I, "r_2": R2,
+        "q_12": q12, "q_23": q23, "q_34": q34, "q_45": q45, "r_3": R3,
+        "e_1": E1, "e_2": E2, "e_3": E3, "e_4": E4, "e_5": E5,
+        "r_g": G * R3, "r_3r": (1.0 - G) * R3,
+        "q_gL": q_gL, "q_rL": q_rL,
+        "q_out": (q_rL + q_gL) * c_2,       # hillslope outflow [m^3/s]
+    }
+
+
+@register_model(
+    "SMAR", dim=7,
+    state_names=("s_1", "s_2", "s_3", "s_4", "s_5", "s_g", "s_r"),
+    description="SMAR (MARRMoT 40): five soil layers (s_1..s_5) that fill "
+                "top-down and evaporate at C^(i-1)*Ep, plus groundwater (s_g). "
+                "Direct runoff R1 + R2 + (1-G)*R3 fills a routing store s_r "
+                "(replaces the gamma UH), drained as K_r*Sr^a_1. Y in mm/d, "
+                "KG in 1/d. Streamflow is the 'q_out' flux [m^3/s].",
+    fluxes=fluxes_smar,
+    precalc=precalculations_basic,
+    param_names=(("H", "-"), ("Y", "mm/d"), ("Smax", "m"), ("C", "-"),
+                 ("G", "-"), ("KG", "1/d"), ("v_h", "m/s"), ("a_1", "-")),
+    default_params=GLOBAL_PARAMS_SMAR,
+    y0=(0.03, 0.03, 0.015, 0.0, 0.0, 0.005, 0.0),
+    storages=("s_1", "s_2", "s_3", "s_4", "s_5", "s_g", "s_r"),
+    streamflow="q_out",
+    balance={
+        "s_1": (("inf",),                 ("e_1", "q_12")),
+        "s_2": (("q_12",),                ("e_2", "q_23")),
+        "s_3": (("q_23",),                ("e_3", "q_34")),
+        "s_4": (("q_34",),                ("e_4", "q_45")),
+        "s_5": (("q_45",),                ("e_5", "r_3")),
+        "s_g": (("r_g",),                 ("q_gL",)),
+        "s_r": (("r_1", "r_2", "r_3r"),   ("q_rL",)),
+    },
+    flux_eqs={
+        "rain_in": (r"P",       r"c_1\,p(t)"),
+        "e_0":     (r"E_0",     r"\min(P,\ E_{pot})"),
+        "p_star":  (r"P^*",     r"\max(P - E_{pot},\ 0)"),
+        "e_star":  (r"E^*",     r"\max(E_{pot} - P,\ 0)"),
+        "r_1":     (r"R_1",     r"H\,P^*\,\min\left(\frac{\sum_i S_i}{S_{max}},\ 1\right)"),
+        "inf":     (r"I",       r"\min(P^* - R_1,\ Y)"),
+        "r_2":     (r"R_2",     r"P^* - R_1 - I"),
+        "q_12":    (r"q_{12}",  r"I\,\sigma(S_1, S_n)"),
+        "q_23":    (r"q_{23}",  r"q_{12}\,\sigma(S_2, S_n)"),
+        "q_34":    (r"q_{34}",  r"q_{23}\,\sigma(S_3, S_n)"),
+        "q_45":    (r"q_{45}",  r"q_{34}\,\sigma(S_4, S_n)"),
+        "r_3":     (r"R_3",     r"q_{45}\,\sigma(S_5, S_n)"),
+        "e_1":     (r"E_1",     r"E^*\,\omega(S_1)"),
+        "e_2":     (r"E_2",     r"C\,E_{pot}\,[1 - \omega(S_1)]\,\omega(S_2)"),
+        "e_3":     (r"E_3",     r"C^2\,E_{pot}\,[1 - \omega(S_2)]\,\omega(S_3)"),
+        "e_4":     (r"E_4",     r"C^3\,E_{pot}\,[1 - \omega(S_3)]\,\omega(S_4)"),
+        "e_5":     (r"E_5",     r"C^4\,E_{pot}\,[1 - \omega(S_4)]\,\omega(S_5)"),
+        "r_g":     (r"R_g",     r"G\,R_3"),
+        "r_3r":    (r"R_{3r}",  r"(1 - G)\,R_3"),
+        "q_gL":    (r"q_{gL}",  r"K_G\,S_g"),
+        "q_rL":    (r"q_{rL}",  r"K_r\,S_r^{a_1}"),
+        "q_out":   (r"Q_{out}", r"c_2\,(q_{rL} + q_{gL})"),
+    },
+    extra_eqs=(
+        (r"S_n", r"S_{max} / 5\quad \text{(capacity of each layer)}"),
+        SMOOTH_EXCESS_EQ,
+        (r"\omega(S)", r"\min\left(\frac{S}{\varepsilon},\ 1\right),\quad \varepsilon = 10^{-4}\ \text{m}\quad \text{(0 for an empty layer)}"),
+        (r"K_r", r"60\,v_h\,\frac{L}{A_h}\quad \text{(replaces MARRMoT's gamma UH)}"),
+        (r"Y,\ K_G", r"\text{given in mm/d and 1/d, used in m/min and 1/min}"),
+        (r"c_1,\ c_2", r"\frac{10^{-3}}{60}\ \text{(mm/h} \to \text{m/min)},\quad \frac{A_h}{60}\ \text{(m/min} \to \text{m}^3\text{/s)}"),
+    ),
+    # R3 leaves S5 but is split: R_g -> Sg and R_3r -> Sr. E_0 is rain that
+    # evaporates before reaching any storage.
+    diagram={"r_3": None, "r_g": ("s_5", "s_g"), "r_3r": ("s_5", "s_r"),
+             "e_0": (RAIN, ET)},
+)
+def model_smar(t, y, params, global_params, forcing,
+               parents_q=0.0, parents_qb=0.0):
+    # parents_q / parents_qb are ignored: routing is not part of this model.
+    f = fluxes_smar(t, y, params, global_params, forcing)
+    ans = np.zeros(7)
+    ans[0] = f["inf"] - f["e_1"] - f["q_12"]                     # s_1
+    ans[1] = f["q_12"] - f["e_2"] - f["q_23"]                    # s_2
+    ans[2] = f["q_23"] - f["e_3"] - f["q_34"]                    # s_3
+    ans[3] = f["q_34"] - f["e_4"] - f["q_45"]                    # s_4
+    ans[4] = f["q_45"] - f["e_5"] - f["r_3"]                     # s_5
+    ans[5] = f["r_g"] - f["q_gL"]                                # s_g
+    ans[6] = f["r_1"] + f["r_2"] + f["r_3r"] - f["q_rL"]         # s_r
     return ans
