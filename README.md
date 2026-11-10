@@ -15,7 +15,7 @@ sweeps, all from the same equations the solver integrated.
 
 | File | What it is |
 |---|---|
-| [`models.py`](models.py) | Model registry and the right-hand sides of all models (`TopLayer`, `CRB3`, `NewZealandV1`, `ConstantRunoff`, `Xinanjiang`, `TankSMA`, `SMAR`), plus `flux_timeseries` and `simulate`. |
+| [`models.py`](models.py) | Model registry and the right-hand sides of all models (`TopLayer`, `CRB3`, `NewZealandV1`, `ConstantRunoff`, `Xinanjiang`, `TankSMA`, `SMAR`, `Hillslope`), plus `flux_timeseries` and `simulate`. |
 | [`app.py`](app.py) | **Hillslope model explorer** web app: define the hillslope and a 24 h hyetograph, pick up to 3 models, edit their parameters and compare hydrographs and storages. |
 | [`setup.py`](setup.py) | Model-independent helpers: `precalculations_*` (per-link parameters for each model), `ArrayForcing` (hourly rain/evap forcing) and default global-parameter vectors. |
 | [`setup_Playground_HLM_CollieRB3.ipynb`](setup_Playground_HLM_CollieRB3.ipynb) | Single-link runs of TopLayer and CRB3: hydrograph, storages, fluxes, water balance, one-at-a-time sensitivity and interactive hydrograph sweeps. |
@@ -115,5 +115,6 @@ their registration carries the metadata described in
 | `Xinanjiang` | `s_w, s_f, s_i, s_g, s_p` | MARRMoT model 28 (port of FindBestModel `step_model_28`) with an added ponded storage `s_p`: surface runoff `RS + RB` drains as `K_p·Sp^a_1` instead of reaching the channel instantly. Rates `kI, kG, cI, cG` in 1/d. Streamflow is the `q_out` flux. |
 | `TankSMA` | `s_1, x_s, s_2, s_3, s_4` | Tank Model - SMA, MARRMoT model 38 (port of FindBestModel `step_model_38`): four stacked tanks with side outlets plus secondary soil moisture `x_s` and capillary rise. Threshold outlets use the literal `A·max(S − t, 0)`, and the evaporation cascade uses a ramp that is 0 for an empty tank. Rates in 1/d (`k1`, `k2` in mm/d). Streamflow is the `q_out` flux. |
 | `SMAR` | `s_1, s_2, s_3, s_4, s_5, s_g, s_r` | SMAR, MARRMoT model 40 (port of HydrologicModelingCourse `step_model_40`): five soil layers that fill top-down and evaporate at `C^(i-1)·Ep` once the layer above is empty, plus groundwater `s_g`. The gamma unit hydrograph (`N`, `K`) is replaced by a hillslope routing store `s_r` that collects `R1 + R2 + (1−G)·R3` and drains as `K_r·Sr^a_1`. Rain evaporated before reaching the soil (`P − P*`) is the flux `e_0`. `Y` in mm/d, `KG` in 1/d. Streamflow is the `q_out` flux. |
+| `Hillslope` | `s_w, s_g, s_r` | Hillslope model, MARRMoT model 13 (port of `step_model_13` in `marrmot_models.py`): soil water `s_w` loses a constant interception `D_w` (flux `e_i`) and produces saturation excess `Q_se = [1 − (1 − Sw/S_h,max)^β_h]·P_e` from a variable contributing area; `(1−a)·Q_se` recharges groundwater `s_g`, which drains linearly (`K_h·Sg`) and feeds capillary rise `C` back to `s_w`. The unit hydrograph (`T_h`) on the surface part `a·Q_se` is replaced by a hillslope routing store `s_r` drained as `K_r·Sr^a_1`. `D_w`, `C` in mm/d, `K_h` in 1/d. Streamflow is the `q_out` flux. |
 
 To list them at runtime: `from models import MODELS; print(MODELS.keys())`.

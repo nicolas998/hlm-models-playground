@@ -58,7 +58,7 @@ from setup import (
     precalculations_constant_runoff,
     GLOBAL_PARAMS_TOPLAYER, GLOBAL_PARAMS_CRB3, GLOBAL_PARAMS_NZV1,
     GLOBAL_PARAMS_CONSTANT_RUNOFF, GLOBAL_PARAMS_XINANJIANG,
-    GLOBAL_PARAMS_TANK_SMA, GLOBAL_PARAMS_SMAR,
+    GLOBAL_PARAMS_TANK_SMA, GLOBAL_PARAMS_SMAR, GLOBAL_PARAMS_HILLSLOPE,
 )
 
 
@@ -1089,4 +1089,112 @@ def model_smar(t, y, params, global_params, forcing,
     ans[4] = f["q_45"] - f["e_5"] - f["r_3"]                     # s_5
     ans[5] = f["r_g"] - f["q_gL"]                                # s_g
     ans[6] = f["r_1"] + f["r_2"] + f["r_3r"] - f["q_rL"]         # s_r
+    return ans
+
+
+# ----------------------------------------------------------------------------
+# Hillslope (MARRMoT m_13_hillslope_7p_2s) + hillslope routing store Sr
+# ----------------------------------------------------------------------------
+# Port of step_model_13 in marrmot_models.py, written for a continuous ODE
+# solver:
+#   * MARRMoT lags the surface part of the saturation excess, Q_se,s = a*Q_se,
+#     through a unit hydrograph of time base T_h. Here it fills a hillslope
+#     routing store Sr drained as q_rL = K_r * Sr^a_1, as SMAR does, so T_h is
+#     dropped;
+#   * interception P - P_e = min(P, D_w) evaporates before reaching the soil;
+#     it is exposed as the flux e_i so the water balance closes;
+#   * evaporation and capillary rise use the TankSMA ramp _tank_on (0 for an
+#     empty store, as MARRMoT's min(Ep, S/dt) and min(C, S/dt) limits).
+#     Capillary rise also shuts off as Sw reaches S_h_max (_smooth_excess);
+#     otherwise a constant C could fill Sw past its capacity.
+def fluxes_hillslope(t, y, params, global_params, forcing):
+    D_w, S_h_max, beta_h, a, C, K_h, v_h, a_1 = global_params[0:8]
+    D_w = D_w * 1e-3 * PER_DAY              # mm/d -> m/min
+    C = C * 1e-3 * PER_DAY                  # mm/d -> m/min
+    K_h = K_h * PER_DAY                     # 1/d  -> 1/min
+
+    rain_mm_hr, e_pot = _read_forcing(forcing, t)
+    L, A_h, invtau, k_2, k_i, c_1, c_2 = params
+    on_w, on_g = _tank_on(y[0]), _tank_on(y[1])
+    s_w, s_g, s_r = (max(v, 0.0) for v in y[0:3])
+
+    P = rain_mm_hr * c_1
+    K_r = L / A_h * v_h * 60.0
+
+    # interception, then saturation excess from a variable contributing area
+    P_e = max(P - D_w, 0.0)
+    Q_se = (1.0 - (1.0 - min(s_w / S_h_max, 1.0)) ** beta_h) * P_e
+
+    E_w = e_pot * on_w
+    cap = C * on_g * (1.0 - _smooth_excess(s_w, S_h_max))
+
+    q_gL = K_h * s_g
+    q_rL = K_r * s_r ** a_1
+
+    return {
+        "rain_in": P,
+        "e_i": P - P_e,                     # intercepted rain, evaporated
+        "p_e": P_e, "e_w": E_w, "q_se": Q_se,
+        "q_sr": a * Q_se, "q_sg": (1.0 - a) * Q_se,
+        "cap": cap,
+        "q_gL": q_gL, "q_rL": q_rL,
+        "q_out": (q_rL + q_gL) * c_2,       # hillslope outflow [m^3/s]
+    }
+
+
+@register_model(
+    "Hillslope", dim=3,
+    state_names=("s_w", "s_g", "s_r"),
+    description="Hillslope (MARRMoT 13): soil water (s_w) with constant "
+                "interception loss D_w and saturation excess from a variable "
+                "contributing area, plus groundwater (s_g) with capillary "
+                "rise. The surface part a*Q_se fills a routing store s_r "
+                "(replaces the UH), drained as K_r*Sr^a_1. D_w, C in mm/d, "
+                "K_h in 1/d. Streamflow is the 'q_out' flux [m^3/s].",
+    fluxes=fluxes_hillslope,
+    precalc=precalculations_basic,
+    param_names=(("D_w", "mm/d"), ("S_h_max", "m"), ("beta_h", "-"),
+                 ("a", "-"), ("C", "mm/d"), ("K_h", "1/d"),
+                 ("v_h", "m/s"), ("a_1", "-")),
+    default_params=GLOBAL_PARAMS_HILLSLOPE,
+    y0=(0.05, 0.005, 0.0),
+    storages=("s_w", "s_g", "s_r"), streamflow="q_out",
+    balance={
+        "s_w": (("p_e", "cap"), ("e_w", "q_se")),
+        "s_g": (("q_sg",),      ("cap", "q_gL")),
+        "s_r": (("q_sr",),      ("q_rL",)),
+    },
+    flux_eqs={
+        "rain_in": (r"P",        r"c_1\,p(t)"),
+        "e_i":     (r"E_i",      r"\min(P,\ D_w)"),
+        "p_e":     (r"P_e",      r"\max(P - D_w,\ 0)"),
+        "e_w":     (r"E_w",      r"E_{pot}\,\omega(S_w)"),
+        "q_se":    (r"Q_{se}",   r"\left[1 - \left(1 - \frac{S_w}{S_{h,max}}\right)^{\beta_h}\right] P_e"),
+        "q_sr":    (r"Q_{se,s}", r"a\,Q_{se}"),
+        "q_sg":    (r"Q_{se,g}", r"(1 - a)\,Q_{se}"),
+        "cap":     (r"C_r",      r"C\,\omega(S_g)\,[1 - \sigma(S_w, S_{h,max})]"),
+        "q_gL":    (r"Q_{h,gw}", r"K_h\,S_g"),
+        "q_rL":    (r"Q_{h,srf}", r"K_r\,S_r^{a_1}"),
+        "q_out":   (r"Q_{out}",  r"c_2\,(Q_{h,srf} + Q_{h,gw})"),
+    },
+    extra_eqs=(
+        SMOOTH_EXCESS_EQ,
+        (r"\omega(S)", r"\min\left(\frac{S}{\varepsilon},\ 1\right),\quad \varepsilon = 10^{-4}\ \text{m}\quad \text{(0 for an empty store)}"),
+        (r"K_r", r"60\,v_h\,\frac{L}{A_h}\quad \text{(replaces MARRMoT's UH of time base } T_h\text{)}"),
+        (r"D_w,\ C,\ K_h", r"\text{given in mm/d and 1/d, used in m/min and 1/min}"),
+        (r"c_1,\ c_2", r"\frac{10^{-3}}{60}\ \text{(mm/h} \to \text{m/min)},\quad \frac{A_h}{60}\ \text{(m/min} \to \text{m}^3\text{/s)}"),
+    ),
+    # Q_se leaves Sw but is split: Q_se,s -> Sr and Q_se,g -> Sg. E_i is rain
+    # intercepted and evaporated before reaching any storage.
+    diagram={"q_se": None, "q_sr": ("s_w", "s_r"), "q_sg": ("s_w", "s_g"),
+             "e_i": (RAIN, ET)},
+)
+def model_hillslope(t, y, params, global_params, forcing,
+                    parents_q=0.0, parents_qb=0.0):
+    # parents_q / parents_qb are ignored: routing is not part of this model.
+    f = fluxes_hillslope(t, y, params, global_params, forcing)
+    ans = np.zeros(3)
+    ans[0] = f["p_e"] + f["cap"] - f["e_w"] - f["q_se"]          # s_w
+    ans[1] = f["q_sg"] - f["cap"] - f["q_gL"]                    # s_g
+    ans[2] = f["q_sr"] - f["q_rL"]                               # s_r
     return ans
