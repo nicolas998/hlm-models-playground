@@ -113,6 +113,20 @@ gamma unit hydrograph (N, K) is replaced by a hillslope routing store:
     [6]  v_h      routing velocity, K_r = L/A_h*v_h*60 [m/s]
     [7]  a_1      exp q_rL = K_r*Sr^a_1              [-]
 Per-link params come from :func:`precalculations_basic`.
+
+Global-parameter vector layout (Hillslope, ``GLOBAL_PARAMS_HILLSLOPE``)
+---------------------------------------------------------------------
+MARRMoT m_13_hillslope_7p_2s with depths in m and rates kept in MARRMoT units.
+The unit hydrograph (T_h) is replaced by a hillslope routing store:
+    [0]  D_w      interception loss rate             [mm/d]
+    [1]  S_h_max  maximum soil moisture storage      [m]
+    [2]  beta_h   contributing-area non-linearity    [-]
+    [3]  a        surface fraction of Q_se (-> Sr)   [-]
+    [4]  C        maximum capillary rise Sg -> Sw    [mm/d]
+    [5]  K_h      groundwater outflow coefficient    [1/d]
+    [6]  v_h      routing velocity, K_r = L/A_h*v_h*60 [m/s]
+    [7]  a_1      exp q_rL = K_r*Sr^a_1              [-]
+Per-link params come from :func:`precalculations_basic`.
 """
 
 import numpy as np
@@ -212,6 +226,17 @@ GLOBAL_PARAMS_SMAR = np.array([
     1.0,          # 7 a_1     exp q_rL                   [-]
 ])
 
+GLOBAL_PARAMS_HILLSLOPE = np.array([
+    2.0,          # 0 D_w     interception loss rate     [mm/d]
+    0.2,          # 1 S_h_max max soil moisture storage  [m]
+    2.0,          # 2 beta_h  contributing-area exponent [-]
+    0.5,          # 3 a       surface fraction of Q_se   [-]
+    0.5,          # 4 C       max capillary rise         [mm/d]
+    0.05,         # 5 K_h     groundwater outflow        [1/d]
+    0.02,         # 6 v_h     routing velocity (K_r)     [m/s]
+    1.0,          # 7 a_1     exp q_rL                   [-]
+])
+
 
 def precalculations_toplayer(L, A_h, A_i, global_params):
     """Per-link parameters for the TopLayer model (asynch 254/255 hillslope).
@@ -264,7 +289,7 @@ def precalculations_crb3(L, A_h, A_i, global_params):
 
 
 def precalculations_basic(L, A_h, A_i, global_params):
-    """Per-link parameters for models that build their own rates (NZV1, Xinanjiang, SMAR).
+    """Per-link parameters for models that build their own rates (NZV1, Xinanjiang, SMAR, Hillslope).
 
     Same output layout as :func:`precalculations`. These models build their
     own release coefficients from ``L``, ``A_h`` and the velocities in
