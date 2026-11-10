@@ -99,6 +99,20 @@ MARRMoT m_38_tank2_16p_5s with depths in m and rates kept in MARRMoT units:
     [14] t4       Y4 outlet height                   [m]
     [15] D1       base outlet (Y5)                   [1/d]
 Per-link params come from :func:`precalculations_basic`.
+
+Global-parameter vector layout (SMAR, ``GLOBAL_PARAMS_SMAR``)
+-----------------------------------------------------------
+MARRMoT m_40_smar_8p_6s with depths in m and rates kept in MARRMoT units. The
+gamma unit hydrograph (N, K) is replaced by a hillslope routing store:
+    [0]  H        direct-runoff fraction of P*       [-]
+    [1]  Y        infiltration capacity              [mm/d]
+    [2]  Smax     total soil storage (5 layers)      [m]
+    [3]  C        evaporation decay with depth       [-]
+    [4]  G        fraction of R3 to groundwater      [-]
+    [5]  KG       groundwater outflow coefficient    [1/d]
+    [6]  v_h      routing velocity, K_r = L/A_h*v_h*60 [m/s]
+    [7]  a_1      exp q_rL = K_r*Sr^a_1              [-]
+Per-link params come from :func:`precalculations_basic`.
 """
 
 import numpy as np
@@ -187,6 +201,17 @@ GLOBAL_PARAMS_TANK_SMA = np.array([
     0.01,         # 15 D1     base outlet (Y5)           [1/d]
 ])
 
+GLOBAL_PARAMS_SMAR = np.array([
+    0.3,          # 0 H       direct-runoff fraction     [-]
+    150.0,        # 1 Y       infiltration capacity      [mm/d]
+    0.15,         # 2 Smax    total soil storage         [m]
+    0.5,          # 3 C       evaporation decay          [-]
+    0.3,          # 4 G       R3 fraction to groundwater [-]
+    0.05,         # 5 KG      groundwater outflow        [1/d]
+    0.02,         # 6 v_h     routing velocity (K_r)     [m/s]
+    1.0,          # 7 a_1     exp q_rL                   [-]
+])
+
 
 def precalculations_toplayer(L, A_h, A_i, global_params):
     """Per-link parameters for the TopLayer model (asynch 254/255 hillslope).
@@ -239,7 +264,7 @@ def precalculations_crb3(L, A_h, A_i, global_params):
 
 
 def precalculations_basic(L, A_h, A_i, global_params):
-    """Per-link parameters for models that build their own rates (NZV1, Xinanjiang).
+    """Per-link parameters for models that build their own rates (NZV1, Xinanjiang, SMAR).
 
     Same output layout as :func:`precalculations`. These models build their
     own release coefficients from ``L``, ``A_h`` and the velocities in
